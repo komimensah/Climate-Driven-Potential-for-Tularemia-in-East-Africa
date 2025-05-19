@@ -1,0 +1,230 @@
+# =============================
+# 📦 1. Load Required Libraries
+# =============================
+library(dplyr)
+library(ggplot2)
+library(sf)
+library(viridis)
+library(ggspatial)  # for north arrow & scale bar
+
+# =============================
+# 📥 2. Load Monthly CRU Climate Data
+# =============================
+full_CRU <- read_csv('/Users/kagboka/Downloads/OBS_CRUv4.csv')
+full_CRU$ID <- as.character(full_CRU$ID)
+
+
+# =============================
+# 📊 4. Compute Annual Climate Summaries
+# =============================
+full_CRU <- full_CRU %>%
+  mutate(tas_f = tas * 9/5 + 32)
+
+annual_climate <- full_CRU %>%
+  group_by(ID, year, country, region, smllrgn) %>%
+  summarise(
+    cumulative_temp = sum(tas_f * 30.4, na.rm = TRUE),
+    cumulative_precip = sum(pr * 30.4, na.rm = TRUE),
+    temp_variability = var(tas_f, na.rm = TRUE),          # now in °F²
+    precip_variability = var(pr, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+# =============================
+# 🌍 5. Filter for East Africa
+# =============================
+east_africa_countries <- c(
+  "Kenya", "Uganda", "Tanzania", "Ethiopia", 
+  "South Sudan", "Rwanda", "Burundi", "Somalia", "Sudan"
+)
+
+annual_climate <- annual_climate %>%
+  filter(country %in% east_africa_countries)
+# =============================
+# 🌍 6. Skilled test for East Africa
+# =============================
+usa_df <- read.csv("/Users/kagboka/Desktop/Tularemaia work/USA_data_Skilled test.csv")
+africa_df <- annual_climate  # already loaded in your environment
+names(usa_df)
+# === Step 1: Filter U.S. training data to Southwest region only ===
+# You must have a region column like `region`, `state`, or `SmllRgn`
+southwest_usa <- usa_df %>%
+  filter(county == "SE")  # adjust column name if different
+##############################################################################
+library(ggplot2)
+library(tidyr)
+
+# ✅ Prepare Africa data
+africa_clean <- data.frame(
+  temp_variability = annual_climate$temp_variability,
+  precip_variability = annual_climate$precip_variability,
+  cumulative_temp = annual_climate$cumulative_temp,
+  cumulative_precip = annual_climate$cumulative_precip,
+  source = "Eastern Africa"
+)
+
+# ✅ Prepare U.S. Southwest data
+usa_clean <- data.frame(
+  temp_variability = southwest_usa$temp_variability,
+  precip_variability = southwest_usa$precip_variability,
+  cumulative_temp = southwest_usa$cumulative_temp,
+  cumulative_precip = southwest_usa$cumulative_precip,
+  source = "U.S. Southwest"
+)
+
+# ✅ Combine both
+combined_df <- rbind(africa_clean, usa_clean)
+
+# ✅ Reshape to long format
+long_df <- pivot_longer(
+  combined_df,
+  cols = c("temp_variability", "precip_variability", "cumulative_temp", "cumulative_precip"),
+  names_to = "variable",
+  values_to = "value"
+)
+
+# ✅ Define facet labels as panel a–d
+facet_labels <- c(
+  temp_variability = "(d) Temperature Variability (°F²)",
+  precip_variability = "(c) Precipitation Variability (mm²)",
+  cumulative_temp = "(b) Cumulative Temperature (°F-days)",
+  cumulative_precip = "(a) Cumulative Precipitation (mm)"
+)
+
+# ✅ Plot with facet_grid
+p <- ggplot(long_df, aes(x = value, fill = source, color = source)) +
+  geom_histogram(aes(y = ..density..), position = "identity", alpha = 0.35, bins = 40) +
+  geom_density(size = 1.1, alpha = 0.6) +
+  facet_wrap(~ variable, scales = "free", labeller = as_labeller(facet_labels)) +
+  scale_fill_manual(values = c("Eastern Africa" = "#1b9e77", "U.S. Southwest" = "#d95f02")) +
+  scale_color_manual(values = c("Eastern Africa" = "#1b9e77", "U.S. Southwest" = "#d95f02")) +
+  theme_minimal(base_size = 14) +
+  labs(
+    title = "",
+    x = "Value",
+    y = "Density",
+    fill = "Region", color = "Region"
+  ) +
+  theme(
+    legend.position = "top",
+    strip.text = element_text(size = 13, face = "bold"),
+    axis.title.x = element_text(margin = margin(t = 10)),
+    axis.title.y = element_text(margin = margin(r = 10))
+  )
+
+# ✅ Save and print
+ggsave(
+  "/Users/kagboka/Desktop/Tularemaia work/Panel_Climate_Distributions_ABCDEF.png",
+  plot = p, width = 12, height = 8, dpi = 300
+)
+
+print(p)
+###########################
+
+
+# Use training region (filtered USA or full)
+usa_min <- sapply(predictors, function(v) min(southwest_usa[[v]], na.rm = TRUE))
+usa_max <- sapply(predictors, function(v) max(southwest_usa[[v]], na.rm = TRUE))
+
+# Define function to compute proportion in range
+compute_inrange_proportion <- function(row) {
+  in_range <- numeric(length(predictors))
+  for (i in seq_along(predictors)) {
+    val <- row[[predictors[i]]]
+    if (is.na(val)) {
+      in_range[i] <- NA
+    } else if (val >= usa_min[i] && val <= usa_max[i]) {
+      in_range[i] <- 1
+    } else {
+      in_range[i] <- 0
+    }
+  }
+  return(mean(in_range, na.rm = TRUE))  # proportion of predictors in-range
+}
+
+# Apply to Africa dataset
+africa_df$prop_inrange <- sapply(1:nrow(africa_df), function(i) compute_inrange_proportion(africa_df[i, ]))
+
+# Aggregate by admin unit
+similarity_summary <- africa_df %>%
+  group_by(ID) %>%
+  summarise(prop_inrange = mean(prop_inrange, na.rm = TRUE), .groups = "drop")
+
+# Load shapefile
+library(sf)
+shapefile_path <- "/Users/kagboka/Dropbox/Malaria Decadal Prediction/Data/AfricaADM1.shp"
+adm_shp <- st_read(shapefile_path)
+adm_shp <- adm_shp %>% rename(ID = OBJECTID)
+
+# Ensure consistent types for join
+adm_shp$ID <- as.character(adm_shp$ID)
+similarity_summary$ID <- as.character(similarity_summary$ID)
+
+# Join and map
+map_data <- left_join(adm_shp, similarity_summary, by = "ID")
+
+# === 1️⃣ Continuous Proportion Map ===
+p_similarity_continuous <- ggplot(map_data) +
+  geom_sf(aes(fill = prop_inrange), color = "gray60", size = 0.1) +
+  scale_fill_viridis_c(
+    option = "viridis",
+    name = "Proportion In-Range",
+    limits = c(0, 1),
+    na.value = "white"
+  ) +
+  annotation_scale(location = "br", width_hint = 0.25) +
+  annotation_north_arrow(
+    location = "tr",
+    which_north = "true",
+    style = north_arrow_fancy_orienteering
+  ) +
+  labs(
+    title = "",
+    subtitle = "",
+    fill = ""
+  ) +
+  theme_minimal(base_size = 14)
+
+ggsave(
+  "/Users/kagboka/Desktop/Tularemaia work/Map_Proportion_InRange.png",
+  plot = p_similarity_continuous,
+  width = 9, height = 6
+)
+
+# === 2️⃣ Classified Similarity Map ===
+# Add similarity classes
+map_data$sim_class <- cut(
+  map_data$prop_inrange,
+  breaks = c(-Inf, 0.2, 0.5, Inf),
+  labels = c("Low", "Moderate", "High"),
+  right = TRUE
+)
+
+# Ensure proper factor levels
+map_data$sim_class <- factor(map_data$sim_class, levels = c("Low", "Moderate", "High"))
+
+# Plot classified map
+p_similarity_classified <- ggplot(map_data) +
+  geom_sf(aes(fill = sim_class), color = "gray60", size = 0.1) +
+  scale_fill_manual(
+    values = c("Low" = "#d73027", "Moderate" = "#fee08b", "High" = "#1a9850"),
+    name = "Similarity"
+  ) +
+  annotation_scale(location = "br", width_hint = 0.25) +
+  annotation_north_arrow(
+    location = "tr",
+    which_north = "true",
+    style = north_arrow_fancy_orienteering
+  ) +
+  labs(
+    title = "Categorical Climate Similarity to U.S. Training Conditions",
+    subtitle = "Based on Proportion of Predictors Within Range",
+    fill = "Similarity"
+  ) +
+  theme_minimal(base_size = 14)
+
+ggsave(
+  "/Users/kagboka/Desktop/Tularemaia work/Map_Proportion_InRange_Classified.png",
+  plot = p_similarity_classified,
+  width = 9, height = 6
+)
