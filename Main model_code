@@ -1,0 +1,110 @@
+# =====================================
+# 📦 Load Data and Libraries
+# =====================================
+
+# Load required libraries
+library(dplyr)
+library(pheatmap)
+library(plm)
+library(Metrics)
+library(mgcv)
+library(MASS)
+library(ggplot2)
+library(cowplot)
+library(corrplot)
+library(sandwich)
+
+# Load cleaned dataset
+project1 <- read.csv("/Users/kagboka/Desktop/Tularemaia work/taluremia  clean data  analysis 1-editted.csv")
+project1 <- na.omit(project1)
+data <- project1
+
+# =====================================
+# 🔍 Correlation Analysis and Clustering
+# =====================================
+
+# Select numeric variables for correlation
+numeric_vars <- data %>% select_if(is.numeric)
+corr_matrix <- cor(numeric_vars, use = "pairwise.complete.obs")
+
+# Visualize correlation matrix
+corrplot(corr_matrix, method = "color", tl.cex = 0.6, tl.col = "black")
+
+# Perform hierarchical clustering on the correlation matrix
+dist_matrix <- as.dist(1 - corr_matrix)
+hc <- hclust(dist_matrix)
+plot(hc, main = "Dendrogram of Correlated Variables", xlab = "Variables", ylab = "Height")
+
+# =====================================
+# 🌍 Regional Modeling (Fixed Effects)
+# =====================================
+
+# Define function for region-specific modeling
+run_region_model <- function(region_data, region_name) {
+  model <- plm(log(talremia_inc + 1) ~ CumPrecip + forest + mixeddev + CumTemp +
+                 PrecipVar + TempVar + poverty + tick_lag,
+               data = region_data, index = c("county", "year.1"), model = "within")
+  summary(model)
+
+  # Predict and evaluate RMSE
+  preds <- predict(model)
+  actuals <- model$model[[1]]
+  cat("\n", region_name, "RMSE:", rmse(actuals, preds), "\n")
+
+  # Cluster-robust standard errors
+  clustered_se <- vcovHC(model, type = "HC1", cluster = "group")
+  print(coef(model, vcov = clustered_se))
+}
+
+# Filter and run models for each region
+regions <- c("NE", "MW", "SW", "P", "PS", "SE")
+for (region in regions) {
+  region_data <- subset(project1, county == region)
+  run_region_model(region_data, region)
+}
+
+# =====================================
+# 📆 Modeling Using Year as Panel Index
+# =====================================
+
+run_year_model <- function(region_data, region_name) {
+  model <- plm(log(talremia_inc + 1) ~ CumPrecip + forest + mixeddev + CumTemp +
+                 PrecipVar + TempVar + poverty + tick_lag,
+               data = region_data, index = c("year.1"), model = "within")
+  summary(model)
+
+  preds <- predict(model)
+  actuals <- model$model[[1]]
+  cat("\n", region_name, "(Year FE) RMSE:", rmse(actuals, preds), "\n")
+
+  clustered_se <- vcovHC(model, type = "HC1", cluster = "group")
+  print(coef(model, vcov = clustered_se))
+}
+
+for (region in regions) {
+  region_data <- subset(project1, county == region)
+  run_year_model(region_data, region)
+}
+
+# =====================================
+# 🏛️ Modeling Using County as Panel Index
+# =====================================
+
+run_county_model <- function(region_data, region_name) {
+  model <- plm(log(talremia_inc + 1) ~ CumPrecip + forest + mixeddev + CumTemp +
+                 PrecipVar + TempVar + poverty + tick_lag,
+               data = region_data, index = c("county"), model = "within")
+  summary(model)
+
+  preds <- predict(model)
+  actuals <- model$model[[1]]
+  cat("\n", region_name, "(County FE) RMSE:", rmse(actuals, preds), "\n")
+
+  clustered_se <- vcovHC(model, type = "HC1", cluster = "group")
+  print(coef(model, vcov = clustered_se))
+}
+
+for (region in regions) {
+  region_data <- subset(project1, county == region)
+  run_county_model(region_data, region)
+}
