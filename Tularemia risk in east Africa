@@ -1,0 +1,264 @@
+# =============================
+# 🧠 6. Tularemia Prediction Function (with ID check)
+# =============================
+predict_tularemia <- function(data) {
+  data$predicted <- with(data,
+                         -0.0009237536 * cumulative_precip +
+                           0.0003518795 * cumulative_temp +
+                           0.0244985750 * precip_variability +
+                           -0.0054522428 * temp_variability
+  )
+  
+  baseline_df <- data %>%
+    filter(year >= 2012 & year <= 2015) %>%
+    group_by(ID) %>%
+    summarise(baseline = mean(predicted, na.rm = TRUE), .groups = "drop")
+  
+  target_df <- data %>%
+    filter(year >= 2016 & year <= 2023) %>%
+    group_by(ID) %>%
+    summarise(target = mean(predicted, na.rm = TRUE), .groups = "drop")
+  
+  # ✅ Ensure overlap in IDs
+  common_IDs <- intersect(baseline_df$ID, target_df$ID)
+  baseline_df <- baseline_df %>% filter(ID %in% common_IDs)
+  target_df <- target_df %>% filter(ID %in% common_IDs)
+  
+  result <- left_join(baseline_df, target_df, by = "ID") %>%
+    mutate(change = target - baseline)
+  
+  return(result)
+}
+
+# =============================
+# 🔁 7. Run Model and Compute SD
+# =============================
+tularemia_results <- predict_tularemia(annual_climate)
+
+tularemia_sd <- annual_climate %>%
+  mutate(predicted = -0.0009237536 * cumulative_precip +
+           0.0003518795 * cumulative_temp +
+           0.0244985750 * precip_variability +
+           -0.0054522428 * temp_variability) %>%
+  group_by(ID) %>%
+  summarise(std_dev = sd(predicted, na.rm = TRUE), .groups = "drop")
+
+tularemia_results <- left_join(tularemia_results, tularemia_sd, by = "ID")
+summary(annual_climate)
+# =============================
+# 🗺️ 8. Load and Filter Shapefile
+# =============================
+adm_shp <- st_read("/Users/kagboka/Dropbox/Malaria Decadal Prediction/Data/AfricaADM1.shp") %>%
+  rename(ID = OBJECTID) %>%
+  mutate(ID = as.character(ID)) %>%
+  filter(NAME_0 %in% east_africa_countries)
+
+map_data <- left_join(adm_shp, tularemia_results, by = "ID")
+
+##################################
+library(ggplot2)
+library(cowplot)  # For arranging plots
+library(ggspatial)  # For scale bar and north arrow
+
+# =============================
+# 🗺️ 1. Map A: Change in Suitability
+# =============================
+p_change <- ggplot(map_data) +
+  geom_sf(aes(fill = change), color = "gray60", size = 0.1) +
+  scale_fill_viridis_c(option = "plasma", name = expression(Delta*" Suitability"), na.value = "white") +
+  labs(
+    title = "(A)",
+    subtitle = ""
+  ) +
+  annotation_scale(location = "br", width_hint = 0.25) +
+  annotation_north_arrow(location = "tr", which_north = "true",
+                         style = north_arrow_fancy_orienteering) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(face = "bold", size = 15),
+    plot.subtitle = element_text(size = 12),
+    legend.position = "right",
+    legend.title = element_text(face = "bold")
+  )
+
+# =============================
+# 🗺️ 2. Map B: Standard Deviation (Variability)
+# =============================
+p_sd <- ggplot(map_data) +
+  geom_sf(aes(fill = std_dev), color = "gray60", size = 0.1) +
+  scale_fill_viridis_c(option = "magma", name = "SD of Suitability", na.value = "white") +
+  labs(
+    title = "(B)",
+    subtitle = ""
+  ) +
+  annotation_scale(location = "br", width_hint = 0.25) +
+  annotation_north_arrow(location = "tr", which_north = "true",
+                         style = north_arrow_fancy_orienteering) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(face = "bold", size = 15),
+    plot.subtitle = element_text(size = 12),
+    legend.position = "right",
+    legend.title = element_text(face = "bold")
+  )
+
+# =============================
+# 📊 3. Arrange A + B Side-by-Side
+# =============================
+final_map <- plot_grid(p_change, p_sd, ncol = 2, align = "hv", rel_widths = c(1, 1))
+
+# Save the combined figure
+ggsave(
+  "/Users/kagboka/Desktop/Tularemaia work/Tularemia_Change_and_SD_Maps_Panel.png",
+  plot = final_map,
+  width = 14, height = 6.5, dpi = 600
+)
+
+#############################################################Final check
+
+library(ggplot2)
+library(ggspatial)
+library(cowplot)
+library(sf)
+
+# =============================
+# 🗺️ 1. Map A: Change in Suitability
+# =============================
+p_change <- ggplot(map_data) +
+  geom_sf(aes(fill = change), color = "gray60", size = 0.1) +
+  scale_fill_viridis_c(
+    option = "plasma",
+    name = expression(Delta*" Suitability"),
+    na.value = "white",
+    breaks = scales::pretty_breaks(n = 5),
+    guide = guide_colorbar(
+      barwidth = 0.5,
+      barheight = 10,
+      title.position = "top"
+    )
+  ) +
+  labs(
+    title = "(A) Change in Tularemia Climate Suitability",
+    subtitle = "2017–2020 vs. 2011–2016 (East Africa)"
+  ) +
+  annotation_scale(location = "br", width_hint = 0.25) +
+  annotation_north_arrow(location = "tr", which_north = "true",
+                         style = north_arrow_fancy_orienteering) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(face = "bold", size = 15),
+    plot.subtitle = element_text(size = 12),
+    legend.position = "right",
+    legend.title = element_text(face = "bold"),
+    axis.text = element_blank(),
+    axis.ticks = element_blank()
+  )
+
+# =============================
+# 🗺️ 2. Map B: Standard Deviation (Variability)
+# =============================
+p_sd <- ggplot(map_data) +
+  geom_sf(aes(fill = std_dev), color = "gray60", size = 0.1) +
+  scale_fill_viridis_c(
+    option = "magma",
+    name = "SD of Suitability",
+    na.value = "white",
+    breaks = scales::pretty_breaks(n = 5),
+    guide = guide_colorbar(
+      barwidth = 0.5,
+      barheight = 10,
+      title.position = "top"
+    )
+  ) +
+  labs(
+    title = "(B) Interannual Variability in Tularemia Suitability",
+    subtitle = "Standard deviation of annual predictions (2011–2020)"
+  ) +
+  annotation_scale(location = "br", width_hint = 0.25) +
+  annotation_north_arrow(location = "tr", which_north = "true",
+                         style = north_arrow_fancy_orienteering) +
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(face = "bold", size = 15),
+    plot.subtitle = element_text(size = 12),
+    legend.position = "right",
+    legend.title = element_text(face = "bold"),
+    axis.text = element_blank(),
+    axis.ticks = element_blank()
+  )
+
+# =============================
+# 📊 3. Combine A + B Side-by-Side
+# =============================
+final_panel <- plot_grid(p_change, p_sd, ncol = 2, align = "hv", rel_widths = c(1, 1))
+
+# Save the combined figure
+ggsave(
+  "/Users/kagboka/Desktop/Tularemia_Change_SD_Enhanced_Maps.png",
+  plot = final_panel,
+  width = 14, height = 6.5, dpi = 600
+)
+
+#########################################################
+# =============================
+# 📆 11. Yearly Tularemia Anomaly Maps (2016–2023)
+# =============================
+
+# Compute baseline per ID (2012–2015)
+baseline_years <- annual_climate %>%
+  filter(year >= 2012, year <= 2015) %>%
+  mutate(predicted = -0.0009237536 * cumulative_precip +
+           0.0003518795 * cumulative_temp +
+           0.0244985750 * precip_variability +
+           -0.0054522428 * temp_variability) %>%
+  group_by(ID) %>%
+  summarise(baseline = mean(predicted, na.rm = TRUE), .groups = "drop")
+
+# Loop over each target year and compute anomaly (year - baseline)
+yearly_maps <- list()
+
+for (yr in 2016:2023) {
+  yearly_df <- annual_climate %>%
+    filter(year == yr) %>%
+    mutate(predicted = -0.0009237536 * cumulative_precip +
+             0.0003518795 * cumulative_temp +
+             0.0244985750 * precip_variability +
+             -0.0054522428 * temp_variability) %>%
+    left_join(baseline_years, by = "ID") %>%
+    mutate(anomaly = predicted - baseline)
+  
+  map_year <- left_join(adm_shp, yearly_df, by = "ID")
+  
+  p_year <- ggplot(map_year) +
+    geom_sf(aes(fill = anomaly), color = "gray60", size = 0.1) +
+    scale_fill_viridis_c(option = "inferno", name = paste0("Δ Suitability ", yr), na.value = "white") +
+    labs(
+      title = paste("Tularemia Suitability Change vs. Baseline -", yr)
+    ) +
+    annotation_scale(location = "br", width_hint = 0.25) +
+    annotation_north_arrow(location = "tr", which_north = "true",
+                           style = north_arrow_fancy_orienteering) +
+    theme_minimal(base_size = 13) +
+    theme(
+      plot.title = element_text(face = "bold", size = 14),
+      legend.title = element_text(face = "bold"),
+      legend.position = "right"
+    )
+  
+  # Save and store
+  ggsave(
+    filename = paste0("/Users/kagboka/Desktop/Tularemaia work/Suitability_Anomaly_", yr, ".png"),
+    plot = p_year,
+    width = 8, height = 6, dpi = 600
+  )
+  
+  yearly_maps[[as.character(yr)]] <- p_year
+}
+
+# Optional: Combine all yearly anomaly maps into a single PDF
+pdf("/Users/kagboka/Desktop/Tularemaia work/Tularemia_Yearly_Anomaly_Series.pdf", width = 8, height = 6)
+for (yr in names(yearly_maps)) {
+  print(yearly_maps[[yr]])
+}
+dev.off()
+
